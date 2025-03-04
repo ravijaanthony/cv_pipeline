@@ -4,7 +4,6 @@ import DragDropBox from "./DragDropBox";
 
 function App() {
 
-
   // Funcition to dropped data to backend
   const sendToBackend = async (file: File) => {
     const formData = new FormData();

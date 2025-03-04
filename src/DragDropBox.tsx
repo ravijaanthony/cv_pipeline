@@ -1,5 +1,5 @@
-import React, { useCallback } from "react";
-import { useDropzone } from "react-dropzone";
+import React from "react";
+// import { useDropzone } from "react-dropzone";
 
 interface DragDropBoxProps {
     sendToBackend: (file: File) => void; // Function to send dropped file to backend
