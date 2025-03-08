@@ -9,6 +9,8 @@ import axios from "axios";
 import { google } from "googleapis";
 import stream from "stream";
 import fs from "fs";
+import nodemailer from "nodemailer";
+import schedule from "node-schedule";
 
 const app = express();
 const PORT = 5000;
@@ -131,151 +133,250 @@ app.post("/upload", upload.single("file"), async (req, res) => {
         return res.status(400).send("No files were uploaded.");
     }
 
-    try {
-        const fileExtension = path.extname(req.file.originalname).toLowerCase();
-        let fileData;
+    // try {
+    const fileExtension = path.extname(req.file.originalname).toLowerCase();
+    let fileData;
 
-        if (fileExtension === ".docx") {
-            const result = await mammoth.extractRawText({ buffer: req.file.buffer });
-            fileData = result.value;
-        } else if (fileExtension === ".pdf") {
-            const pdfResult = await pdfParse(req.file.buffer);
-            fileData = pdfResult.text;
-        } else {
-            return res.status(400).send("Unsupported file format");
+    if (fileExtension === ".docx") {
+        const result = await mammoth.extractRawText({ buffer: req.file.buffer });
+        fileData = result.value;
+    } else if (fileExtension === ".pdf") {
+        const pdfResult = await pdfParse(req.file.buffer);
+        fileData = pdfResult.text;
+    } else {
+        return res.status(400).send("Unsupported file format");
+    }
+
+    console.log("Full extracted text:", fileData);
+    const extractedData = extractCVData(fileData);
+    console.log("Extracted data:", extractedData);
+
+    // Convert the file buffer to a readable stream for Drive upload.
+    const bufferStream = new stream.PassThrough();
+    bufferStream.end(req.file.buffer);
+
+    const fileMetadata = {
+        name: req.file.originalname,
+        parents: ["1SyBij1koqegqOFZzG-sIJ4ZMLWkH-q9l"] // Google Drive folder ID
+    };
+
+    // Upload the file to Google Drive.
+    const driveResponse = await drive.files.create({
+        resource: fileMetadata,
+        media: {
+            mimeType: req.file.mimetype,
+            body: bufferStream
+        },
+        fields: "id"
+    });
+
+    const driveFileId = driveResponse.data.id;
+    console.log("Google Drive File Id:", driveFileId);
+
+    // Set the file's permission to public (anyone with the link can view)
+    await drive.permissions.create({
+        fileId: driveFileId,
+        resource: {
+            role: 'reader',
+            type: 'anyone'
         }
+    });
 
-        console.log("Full extracted text:", fileData);
-        const extractedData = extractCVData(fileData);
-        console.log("Extracted data:", extractedData);
+    // Retrieve the file's public links
+    const fileInfo = await drive.files.get({
+        fileId: driveFileId,
+        fields: 'id, webViewLink, webContentLink'
+    });
 
-        // Convert the file buffer to a readable stream for Drive upload.
-        const bufferStream = new stream.PassThrough();
-        bufferStream.end(req.file.buffer);
+    const downloadablePublicLink = fileInfo.data.webViewLink; // or use webContentLink for download
+    console.log("Public link:", downloadablePublicLink);
 
-        const fileMetadata = {
-            name: req.file.originalname,
-            parents: ["1SyBij1koqegqOFZzG-sIJ4ZMLWkH-q9l"] // Google Drive folder ID
-        };
-
-        // Upload the file to Google Drive.
-        const driveResponse = await drive.files.create({
-            resource: fileMetadata,
-            media: {
-                mimeType: req.file.mimetype,
-                body: bufferStream
-            },
-            fields: "id"
-        });
-
-        const driveFileId = driveResponse.data.id;
-        console.log("Google Drive File Id:", driveFileId);
-
-        // Set the file's permission to public (anyone with the link can view)
-        await drive.permissions.create({
-            fileId: driveFileId,
-            resource: {
-                role: 'reader',
-                type: 'anyone'
-            }
-        });
-
-        // Retrieve the file's public links
-        const fileInfo = await drive.files.get({
-            fileId: driveFileId,
-            fields: 'id, webViewLink, webContentLink'
-        });
-        
-        const publicLink = fileInfo.data.webViewLink; // or use webContentLink for download
-        console.log("Public link:", publicLink);
-
-        // Prepare payload for external API call.
-        const payload = {
-            cv_data: {
-                personal_info: {
-                    name: extractedData.name || "",
-                    email: extractedData.email || "",
-                    phone: extractedData.phone || ""
-                },
-                education: extractedData.education ? [extractedData.education] : [],
-                qualifications: extractedData.qualifications
-                    ? (Array.isArray(extractedData.qualifications)
-                        ? extractedData.qualifications
-                        : [extractedData.qualifications])
-                    : [],
-                projects: extractedData.projects ? [extractedData.projects] : [],
-                cv_public_link: publicLink
-            },
-            metadata: {
-                applicant_name: extractedData.name || "",
+    // Prepare payload for external API call.
+    const payload = {
+        cv_data: {
+            personal_info: {
+                name: extractedData.name || "",
                 email: extractedData.email || "",
-                status: "prod",
-                cv_processed: true,
-                processed_timestamp: new Date().toISOString()
-            }
-        };
-
-        let externalResult;
-        try {
-            const externalResponse = await axios.post(
-                "https://rnd-assignment.automations-3d6.workers.dev/",
-                payload,
-                {
-                    headers: {
-                        "Content-Type": "application/json",
-                        "X-Candidate-Email": "ravijaanthony@gmail.com"
-                    }
-                }
-            );
-            console.log("External API response:", externalResponse.data);
-            externalResult = externalResponse.data;
-        } catch (error) {
-            console.error("Error sending payload to external endpoint:", error);
-            externalResult = { error: "External API call failed", details: error.message };
+                phone: extractedData.phone || ""
+            },
+            education: extractedData.education ? [extractedData.education] : [],
+            qualifications: extractedData.qualifications
+                ? (Array.isArray(extractedData.qualifications)
+                    ? extractedData.qualifications
+                    : [extractedData.qualifications])
+                : [],
+            projects: extractedData.projects ? [extractedData.projects] : [],
+            cv_public_link: downloadablePublicLink
+        },
+        metadata: {
+            applicant_name: extractedData.name || "",
+            email: extractedData.email || "",
+            status: "prod",
+            cv_processed: true,
+            processed_timestamp: new Date().toISOString()
         }
+    };
 
-        // Define the desired order of fields for the Google Sheet.
-        const orderedFields = [
-            "name",
-            "email",
-            "phone",
-            "summary",
-            "projects",
-            "experience",
-            "education",
-            "achievements",
-            "references"
-        ];
-
-        // Build the values array based on the ordered fields.
-        const values = [orderedFields.map(field => extractedData[field] || "")];
-
-        const resource = { values };
-
-        const sheetResponse = await sheets.spreadsheets.values.append({
-            spreadsheetId,
-            range: "Sheet1!A1", // Change as needed
-            valueInputOption: "RAW",
-            insertDataOption: "INSERT_ROWS",
-            resource
-        });
-
-        console.log("Sheet update response:", sheetResponse.data);
-
-        res.json({
-            message: "File processed successfully",
-            fileId: driveFileId,
-            extractedData,
-            externalResult,
-            sheetResponse: sheetResponse.data
-        });
-
+    let externalResult;
+    try {
+        const externalResponse = await axios.post(
+            "https://rnd-assignment.automations-3d6.workers.dev/",
+            payload,
+            {
+                headers: {
+                    "Content-Type": "application/json",
+                    "X-Candidate-Email": "ravijaanthony@gmail.com"
+                }
+            }
+        );
+        console.log("External API response:", externalResponse.data);
+        externalResult = externalResponse.data;
     } catch (error) {
-        console.error("Error processing file:", error);
-        if (!res.headersSent) {
-            res.status(500).send("Error processing file.");
+        console.error("Error sending payload to external endpoint:", error);
+        externalResult = { error: "External API call failed", details: error.message };
+    }
+
+    // Define the desired order of fields for the Google Sheet.
+    const orderedFields = [
+        "name",
+        "email",
+        "phone",
+        "summary",
+        "projects",
+        "experience",
+        "education",
+        "achievements",
+        "references"
+    ];
+
+    // Build the values array based on the ordered fields.
+    const values = [orderedFields.map(field => extractedData[field] || "")];
+
+    const resource = { values };
+
+    const sheetResponse = await sheets.spreadsheets.values.append({
+        spreadsheetId,
+        range: "Sheet1!A1", // Change as needed
+        valueInputOption: "RAW",
+        insertDataOption: "INSERT_ROWS",
+        resource
+    });
+
+    console.log("Sheet update response:", sheetResponse.data);
+
+    // Send the response back to the client.
+    const candidateEmail = extractedData.email || "";
+
+
+    // if (candidateEmail) {
+    //     console.log("Scheduling email to be sent to:", candidateEmail);
+    //     try {
+    //         const now = new Date;
+    //         const nextDay = new Date(now);
+    //         nextDay.setDate(now.getDate() + 1);
+    //         nextDay.setHours(9, 0, 0, 0); // 9AM
+    //         console.log("Scheduler set", nextDay);
+
+    //         schedule.scheduleJob(nextDay, async () => {
+    //             // Send an email to the candidate with the public link.
+    //             let transporter = nodemailer.createTransport({
+    //                 service: "gmail",
+    //                 auth: {
+    //                     user: "service.test.services@gmail.com",
+    //                     pass: "yfij yirp ybai hbtd"
+    //                 }
+    //             });
+
+    //             console.log("Transporter set");
+
+    //             const mailOptions = {
+    //                 from: "service.test.services@gmail.com",
+    //                 to: candidateEmail,
+    //                 subject: "Your CV is Under Review",
+    //                 text:
+    //                     `Dear ${extractedData.name || "Applicant"},
+
+    //             Thank you for submitting your CV. We wanted to let you know that your CV is currently under review. We will get back to you soon with more information.
+
+    //             Best regards,
+    //             Company`
+    //             };
+
+    //             console.log("Mail options set");
+
+    //             try {
+    //                 let info = await transporter.sendMail(mailOptions);
+    //                 console.log("Email scheduled successfully:", info);
+    //             } catch (error) {
+    //                 console.error("Error sending email:", error);
+    //             }
+
+    //         });
+
+    //     } catch (error) {
+    //         console.error("Error scheduling email:", error);
+    //     }
+    // }
+
+
+    if (candidateEmail) {
+        console.log("Scheduling email to be sent to:", candidateEmail);
+
+        const sendDate = new Date(2025, 2, 8, 14, 45, 0); // March 9, 2025, at 9:00 AM
+
+        // Ensure sendDate is in the future
+        if (sendDate > new Date()) {
+            const transporter = nodemailer.createTransport({
+                service: "gmail",
+                auth: {
+                    user: "service.test.services@gmail.com",
+                    pass: "yfij yirp ybai hbtd"
+                }
+            });
+
+            console.log("Transporter set");
+
+            schedule.scheduleJob(sendDate, async function () {
+                console.log("Scheduler triggered at:", new Date());
+
+                const mailOptions = {
+                    from: "service.test.services@gmail.com",
+                    to: candidateEmail,
+                    subject: "Your CV is Under Review",
+                    text: `Dear ${extractedData.name || "Applicant"},
+    
+                    Thank you for submitting your CV. We wanted to let you know that your CV is currently under review. We will get back to you soon with more information.
+    
+                    Best regards,
+                    Company`
+                };
+
+                console.log("Mail options set");
+
+                try {
+                    let info = await transporter.sendMail(mailOptions);
+                    console.log("Email sent successfully:", info.response);
+                } catch (error) {
+                    console.error("Error sending email:", error);
+                }
+            });
+
+            console.log("Job scheduled for:", sendDate);
+        } else {
+            console.error("Scheduled date is in the past. Please choose a future date.");
         }
     }
+
+
+    res.json({
+        message: "File processed successfully",
+        fileId: driveFileId,
+        extractedData,
+        externalResult,
+        sheetResponse: sheetResponse.data,
+        downloadablePublicLink
+    });
+    //  );
 });
 
 app.get("/cv", async (req, res) => {
