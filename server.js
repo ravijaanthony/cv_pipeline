@@ -3,11 +3,12 @@ import cors from "cors";
 import bodyParser from "body-parser";
 import multer from "multer";
 import path from "path";
-import pdfParse from "pdf-parse/lib/pdf-parse.js"; // Import from internal file
+import pdfParse from "pdf-parse/lib/pdf-parse.js";
 import mammoth from "mammoth";
-import axios from "axios"; // Import axios to send requests from server side
+import axios from "axios";
 import { google } from "googleapis";
 import stream from "stream";
+import fs from "fs";
 
 const app = express();
 const PORT = 5000;
@@ -15,31 +16,117 @@ const PORT = 5000;
 app.use(cors());
 app.use(bodyParser.json());
 
-
-// Use memory storage to access file buffer directly
+// Use memory storage so that we can work directly with the file buffer
 const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
-
 // Google Drive authentication using service account
-const SCOPES = ['https://www.googleapis.com/auth/drive.file', 'https://www.googleapis.com/auth/spreadsheets'];
+const SCOPES = [
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/spreadsheets"
+];
 const auth = new google.auth.GoogleAuth({
-    keyFile: './cv-pipeline-01-92372bcf22b4.json', // Update with your credentials file path
-    scopes: SCOPES,
+    keyFile: "./cv-pipeline-01-92372bcf22b4.json", // Update with your credentials file path
+    scopes: SCOPES
 });
 
-const drive = google.drive({ version: 'v3', auth });
+const drive = google.drive({ version: "v3", auth });
+const sheets = google.sheets({ version: "v4", auth });
+const spreadsheetId = "1c9CHuGUShXbJOumteOmA5L7ZLlVvLi6BenomVbNevN8"; // Replace with your target spreadsheet ID
 
-// Create a Google Sheets client
-const sheets = google.sheets({ version: 'v4', auth });
-// Replace with your target spreadsheet ID
-const spreadsheetId = '1c9CHuGUShXbJOumteOmA5L7ZLlVvLi6BenomVbNevN8';
+/**
+ * Extracts CV data by splitting text into lines and grouping by section labels.
+ * Assumes that personal info appears before the first label.
+ */
+const extractCVData = (text) => {
+    try {
+        const data = {};
 
+        // Define the list of known labels (all in lowercase)
+        // You can add synonyms or variations here as needed.
+        const labelList = [
+            "summary",
+            "projects",
+            "techinal skills",
+            "technical skills",
+            "experience",
+            "soft skills",
+            "education",
+            "achievements",
+            "participation",
+            "references"
+        ];
+
+        // Split text into non-empty, trimmed lines
+        const lines = text.split("\n").map(line => line.trim()).filter(line => line);
+
+        // Find the index of the first occurrence of any label.
+        let firstLabelIndex = lines.findIndex(line =>
+            labelList.some(label => line.toLowerCase().startsWith(label))
+        );
+
+        // Use the lines before the first label as personal info.
+        const personalInfoLines =
+            firstLabelIndex > 0 ? lines.slice(0, firstLabelIndex) : [];
+
+        // Assume the first line of personal info is the candidate's name.
+        if (personalInfoLines.length > 0) {
+            data.name = personalInfoLines[0];
+        }
+        // (Optional) You could store the remaining personal info in a separate field.
+        data.personal_info =
+            personalInfoLines.length > 1
+                ? personalInfoLines.slice(1).join("\n")
+                : "";
+
+        // Extract email and phone using regex on the full text.
+        const emailPattern = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
+        const phonePattern = /\+?\d[\d\s\-]+/;
+        const emailMatch = text.match(emailPattern);
+        data.email = emailMatch ? emailMatch[0] : "";
+        const phoneMatch = text.match(phonePattern);
+        data.phone = phoneMatch ? phoneMatch[0] : "";
+
+        // Process the lines starting from the first label.
+        let currentLabel = "";
+        for (let i = firstLabelIndex; i < lines.length; i++) {
+            const line = lines[i];
+            // Check if the line starts with any known label.
+            const foundLabel = labelList.find(label =>
+                line.toLowerCase().startsWith(label)
+            );
+            if (foundLabel) {
+                // New section found. Set the current label.
+                currentLabel = foundLabel;
+                // Remove the label text from the line (and any following punctuation or spaces)
+                const content = line.substring(foundLabel.length).replace(/^[:\-\s]+/, "");
+                // Start this section’s content.
+                data[currentLabel] = content;
+            } else if (currentLabel) {
+                // Append subsequent lines to the current section.
+                data[currentLabel] += "\n" + line;
+            }
+        }
+
+        // Trim whitespace from each extracted field.
+        Object.keys(data).forEach((key) => {
+            if (typeof data[key] === "string") {
+                data[key] = data[key].trim();
+            }
+        });
+
+        return data;
+    } catch (error) {
+        console.error("Error extracting CV data:", error);
+        return { error: "Error extracting CV data", details: error.message };
+    }
+};
+let fileName;
 
 app.post("/upload", upload.single("file"), async (req, res) => {
-    console.log("req.file:", req.file);
-    console.log("Buffer exists?", req.file.buffer instanceof Buffer);
+    fileName = req.file.originalname;
 
+    console.log("req.file:", req.file);
     if (!req.file) {
         return res.status(400).send("No files were uploaded.");
     }
@@ -62,33 +149,47 @@ app.post("/upload", upload.single("file"), async (req, res) => {
         const extractedData = extractCVData(fileData);
         console.log("Extracted data:", extractedData);
 
-        // res.json({ message: "File processed successfully", extractedData });
-
-        // Convert the file buffer to a readable stream
+        // Convert the file buffer to a readable stream for Drive upload.
         const bufferStream = new stream.PassThrough();
         bufferStream.end(req.file.buffer);
 
-        // Define file metadata for Drive
         const fileMetadata = {
             name: req.file.originalname,
-            parents: ['1SyBij1koqegqOFZzG-sIJ4ZMLWkH-q9l'], // Google Drive folder ID
+            parents: ["1SyBij1koqegqOFZzG-sIJ4ZMLWkH-q9l"] // Google Drive folder ID
         };
 
-        //Upload the file to Google Drive
+        // Upload the file to Google Drive.
         const driveResponse = await drive.files.create({
             resource: fileMetadata,
             media: {
                 mimeType: req.file.mimetype,
-                body: bufferStream,
+                body: bufferStream
             },
-            fields: 'id',
+            fields: "id"
         });
 
         const driveFileId = driveResponse.data.id;
         console.log("Google Drive File Id:", driveFileId);
 
+        // Set the file's permission to public (anyone with the link can view)
+        await drive.permissions.create({
+            fileId: driveFileId,
+            resource: {
+                role: 'reader',
+                type: 'anyone'
+            }
+        });
 
+        // Retrieve the file's public links
+        const fileInfo = await drive.files.get({
+            fileId: driveFileId,
+            fields: 'id, webViewLink, webContentLink'
+        });
+        
+        const publicLink = fileInfo.data.webViewLink; // or use webContentLink for download
+        console.log("Public link:", publicLink);
 
+        // Prepare payload for external API call.
         const payload = {
             cv_data: {
                 personal_info: {
@@ -97,12 +198,13 @@ app.post("/upload", upload.single("file"), async (req, res) => {
                     phone: extractedData.phone || ""
                 },
                 education: extractedData.education ? [extractedData.education] : [],
-                qualifications: extractedData.qualification ? (Array.isArray(extractedData.qualification)
-                    ? extractedData.qualification
-                    : [extractedData.qualification])
+                qualifications: extractedData.qualifications
+                    ? (Array.isArray(extractedData.qualifications)
+                        ? extractedData.qualifications
+                        : [extractedData.qualifications])
                     : [],
                 projects: extractedData.projects ? [extractedData.projects] : [],
-                cv_public_link: "https://www.example.com/cv.pdf"
+                cv_public_link: publicLink
             },
             metadata: {
                 applicant_name: extractedData.name || "",
@@ -111,39 +213,42 @@ app.post("/upload", upload.single("file"), async (req, res) => {
                 cv_processed: true,
                 processed_timestamp: new Date().toISOString()
             }
-
         };
+
         let externalResult;
         try {
             const externalResponse = await axios.post(
                 "https://rnd-assignment.automations-3d6.workers.dev/",
-                payload, {
-                headers: {
-                    "Content-Type": "application/json",
-                    "X-Candidate-Email": "ravijaanthony@gmail.com"
+                payload,
+                {
+                    headers: {
+                        "Content-Type": "application/json",
+                        "X-Candidate-Email": "ravijaanthony@gmail.com"
+                    }
                 }
-            }
             );
-
             console.log("External API response:", externalResponse.data);
             externalResult = externalResponse.data;
-
         } catch (error) {
             console.error("Error sending payload to external endpoint:", error);
-            externalResult = { error: "External API call failed", details: externalError.message };
+            externalResult = { error: "External API call failed", details: error.message };
         }
 
-
-        const values = [
-            [
-                extractedData.name || "",
-                extractedData.email || "",
-                extractedData.phone || "",
-                extractedData.education || "",
-                extractedData.qualification || "",
-                extractedData.projects || "",
-            ]
+        // Define the desired order of fields for the Google Sheet.
+        const orderedFields = [
+            "name",
+            "email",
+            "phone",
+            "summary",
+            "projects",
+            "experience",
+            "education",
+            "achievements",
+            "references"
         ];
+
+        // Build the values array based on the ordered fields.
+        const values = [orderedFields.map(field => extractedData[field] || "")];
 
         const resource = { values };
 
@@ -152,7 +257,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
             range: "Sheet1!A1", // Change as needed
             valueInputOption: "RAW",
             insertDataOption: "INSERT_ROWS",
-            resource,
+            resource
         });
 
         console.log("Sheet update response:", sheetResponse.data);
@@ -162,7 +267,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
             fileId: driveFileId,
             extractedData,
             externalResult,
-            sheetResponse: sheetResponse.data,
+            sheetResponse: sheetResponse.data
         });
 
     } catch (error) {
@@ -173,120 +278,17 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     }
 });
 
-// const extractCVData = (text) => {
-//     const data = {};
-//     const lines = text.split('\n').map(line => line.trim());
-
-//     lines.forEach(line => {
-//         const nameMatch = line.match(/^Name:\s*(.+)$/i);
-//         if (nameMatch) { data.name = nameMatch[1].trim(); }
-
-//         const emailMatch = line.match(/^Email:\s*(.+)$/i);
-//         if (emailMatch) { data.email = emailMatch[1].trim(); }
-
-//         const phoneMatch = line.match(/^Phone:\s*(.+)$/i);
-//         if (phoneMatch) { data.phone = phoneMatch[1].trim(); }
-
-//         const educationMatch = line.match(/^Education:\s*(.+)$/i);
-//         if (educationMatch) { data.education = educationMatch[1].trim(); }
-
-//         const qualificationMatch = line.match(/^Qualification:\s*(.+)$/i);
-//         if (qualificationMatch) { data.qualification = qualificationMatch[1].trim(); }
-
-//         const projectsMatch = line.match(/^Projects?:\s*(.+)$/i);
-//         if (projectsMatch) { data.projects = projectsMatch[1].trim(); }
-//     });
-
-//     return data;
-// };
-
-const extractCVData = (text) => {
-    const data = {};
-
-    // Regular expression patterns
-    const emailPattern = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/;
-    const phonePattern = /\b(?:\+?\d{1,3})?[-.\s]?(?:\(?\d{1,4}?\)?[-.\s]?)?\d{1,4}[-.\s]?\d{1,4}[-.\s]?\d{1,9}\b/;
-    const linkedinPattern = /(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/[A-Za-z0-9_-]+/i;
-    const githubPattern = /(?:https?:\/\/)?(?:www\.)?github\.com\/[A-Za-z0-9_-]+/i;
-
-    // Extract email
-    const emailMatch = text.match(emailPattern);
-    if (emailMatch) {
-        data.email = emailMatch[0];
+app.get("/cv", async (req, res) => {
+    try {
+        // Replace the file path with the location of your PDF file if needed.
+        const dataBuffer = fs.readFileSync(fileName);
+        const data = await pdfParse(dataBuffer);
+        const cvData = extractCVData(data.text);
+        res.json(cvData);
+    } catch (error) {
+        res.status(500).json({ error: error.toString() });
     }
-
-    // Extract phone number
-    const phoneMatch = text.match(phonePattern);
-    if (phoneMatch) {
-        data.phone = phoneMatch[0];
-    }
-
-    // Extract LinkedIn profile
-    const linkedinMatch = text.match(linkedinPattern);
-    if (linkedinMatch) {
-        data.linkedin = linkedinMatch[0];
-    }
-
-    // Extract GitHub profile
-    const githubMatch = text.match(githubPattern);
-    if (githubMatch) {
-        data.github = githubMatch[0];
-    }
-
-    // Attempt to extract name (heuristic approach)
-    // const lines = text.split('\n').map(line => line.trim()).filter(line => line);
-    // if (lines.length > 0) {
-    //     data.name = lines[0]; // Assuming the first non-empty line is the name
-    // }
-
-    const sectionPatterns = {
-        education: /(?:education|academic background|educational qualifications):?\s*([\s\S]*?)(?=\n\s*(?:qualifications|skills|projects|experience|summary|about me|description|$))/i,
-        qualifications: /(?:qualifications|certifications|skills):?\s*([\s\S]*?)(?=\n\s*(?:education|skills|projects|experience|summary|about me|description|$))/i,
-        summary: /(?:summary|about me|description):?\s*([\s\S]*?)(?=\n\s*(?:education|qualifications|skills|projects|experience|$))/i,
-        projects: /(?:projects|work samples|portfolio):?\s*([\s\S]*?)(?=\n\s*(?:education|qualifications|skills|experience|summary|about me|description|$))/i,
-
-    };
-    const sectionHeaders = ['summary', 'about me', 'description', 'education', 'qualifications', 'projects', 'achievements', 'references', 'skills', 'experience', 'work experience', 'professional experience', 'certifications', 'courses', 'training', 'languages', 'interests', 'hobbies', 'volunteer', 'extracurricular', 'publications', 'patents', 'awards', 'honors', 'activities', 'organizations', 'memberships', 'affiliations', 'personal details', 'contact', 'contact details', 'profile', 'objective'];
-
-    // Create a regex pattern to identify section headers
-    const headerPattern = new RegExp(`^(${sectionHeaders.join('|')})[:\\s]*$`, 'i');
-
-    // Split text into lines and initialize variables
-    const lines = text.split('\n').map(line => line.trim()).filter(line => line);
-    let currentSection = '';
-    let sectionContent = {};
-
-    // Iterate through lines to categorize content
-    lines.forEach(line => {
-        const headerMatch = line.toLowerCase().match(headerPattern);
-        if (headerMatch) {
-            currentSection = headerMatch[1].toLowerCase();
-            sectionContent[currentSection] = [];
-        } else if (currentSection) {
-            sectionContent[currentSection].push(line);
-        }
-    });
-
-    // Assign extracted content to data object
-    Object.keys(sectionContent).forEach(section => {
-        data[section] = sectionContent[section].join(' ');
-    });
-
-    // Attempt to extract name (heuristic approach)
-    if (lines.length > 0) {
-        data.name = lines[0]; // Assuming the first non-empty line is the name
-    }
-
-    // Object.keys(sectionPatterns).forEach(section => {
-    //     const match = text.match(sectionPatterns[section]);
-    //     if (match) {
-    //         data[section] = match[1].trim();
-    //     }
-    // });
-
-    return data;
-};
-
+});
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
