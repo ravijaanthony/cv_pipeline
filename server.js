@@ -193,34 +193,37 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 
     // Prepare payload for external API call.
     const payload = {
-        cv_data: {
-            personal_info: {
+        "cv_data": {
+            "personal_info": {
                 name: extractedData.name || "",
                 email: extractedData.email || "",
                 phone: extractedData.phone || ""
             },
-            education: extractedData.education ? [extractedData.education] : [],
-            qualifications: extractedData.qualifications
+            "education": extractedData.education ? [extractedData.education] : [],
+            "qualifications": extractedData.qualifications
                 ? (Array.isArray(extractedData.qualifications)
                     ? extractedData.qualifications
                     : [extractedData.qualifications])
                 : [],
-            projects: extractedData.projects ? [extractedData.projects] : [],
-            cv_public_link: downloadablePublicLink
+            "projects": extractedData.projects ? [extractedData.projects] : [],
+            "cv_public_link": downloadablePublicLink
         },
-        metadata: {
-            applicant_name: extractedData.name || "",
-            email: extractedData.email || "",
-            status: "prod",
-            cv_processed: true,
-            processed_timestamp: new Date().toISOString()
+        "metadata": {
+            "applicant_name": extractedData.name || "",
+            "email": extractedData.email || "",
+            "status": "prod",
+            "cv_processed": true,
+            "processed_timestamp": new Date().toISOString()
         }
     };
+    // console.log("Payload for external API:", payload);
 
     let externalResult;
+
     try {
         const externalResponse = await axios.post(
             "https://rnd-assignment.automations-3d6.workers.dev/",
+            // "https://httpbin.org/post", // Use this URL for testing
             payload,
             {
                 headers: {
@@ -229,8 +232,9 @@ app.post("/upload", upload.single("file"), async (req, res) => {
                 }
             }
         );
-        console.log("External API response:", externalResponse.data);
         externalResult = externalResponse.data;
+        console.log("External API response:", externalResponse.data);
+        
     } catch (error) {
         console.error("Error sending payload to external endpoint:", error);
         externalResult = { error: "External API call failed", details: error.message };
