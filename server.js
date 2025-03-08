@@ -266,59 +266,6 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 
     // Send the response back to the client.
     const candidateEmail = extractedData.email || "";
-
-
-    // if (candidateEmail) {
-    //     console.log("Scheduling email to be sent to:", candidateEmail);
-    //     try {
-    //         const now = new Date;
-    //         const nextDay = new Date(now);
-    //         nextDay.setDate(now.getDate() + 1);
-    //         nextDay.setHours(9, 0, 0, 0); // 9AM
-    //         console.log("Scheduler set", nextDay);
-
-    //         schedule.scheduleJob(nextDay, async () => {
-    //             // Send an email to the candidate with the public link.
-    //             let transporter = nodemailer.createTransport({
-    //                 service: "gmail",
-    //                 auth: {
-    //                     user: "service.test.services@gmail.com",
-    //                     pass: "yfij yirp ybai hbtd"
-    //                 }
-    //             });
-
-    //             console.log("Transporter set");
-
-    //             const mailOptions = {
-    //                 from: "service.test.services@gmail.com",
-    //                 to: candidateEmail,
-    //                 subject: "Your CV is Under Review",
-    //                 text:
-    //                     `Dear ${extractedData.name || "Applicant"},
-
-    //             Thank you for submitting your CV. We wanted to let you know that your CV is currently under review. We will get back to you soon with more information.
-
-    //             Best regards,
-    //             Company`
-    //             };
-
-    //             console.log("Mail options set");
-
-    //             try {
-    //                 let info = await transporter.sendMail(mailOptions);
-    //                 console.log("Email scheduled successfully:", info);
-    //             } catch (error) {
-    //                 console.error("Error sending email:", error);
-    //             }
-
-    //         });
-
-    //     } catch (error) {
-    //         console.error("Error scheduling email:", error);
-    //     }
-    // }
-
-
     if (candidateEmail) {
         console.log("Scheduling email to be sent to:", candidateEmail);
 
