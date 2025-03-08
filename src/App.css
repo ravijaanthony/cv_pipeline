@@ -1,42 +1,85 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
+/* Global resets */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body, html {
+  width: 100%;
+    height: 100%;
+    font-family: 'Arial', sans-serif;
+    background-color: #f4f4f4;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* App container: blue background with centered content */
+.app-container {
+  background-color: #81a4cd;  /* background */
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  width: 100vw;
+    height: 100vh;
+}
+
+/* White box styling for the upload area */
+.drag-drop-box {
+  width: 100%;
+  max-width: 400px;
+}
+
+.drop-zone {
+  background: #E7E7E7;
+  border-radius: 8px;
+  padding: 40px;
   text-align: center;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+  transition: border 0.2s ease-in-out;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+/* Optional: when drag is active highlight the border */
+.drop-zone.active {
+  border: 2px dashed #3f51b5;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+/* Style for file select button */
+.file-select-button {
+  display: inline-flex;
+  align-items: center;
+  background-color: #3e7cb1;
+  color: #dbe4ee;
+  border: none;
+  border-radius: 4px;
+  padding: 10px 20px;
+  font-size: 16px;
+  cursor: pointer;
+  transition: background-color 0.2s ease-in-out;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
+.file-select-button:hover {
+  background-color: #054a91;
 }
 
-.card {
-  padding: 2em;
+/* Placeholder for the upload icon */
+.upload-icon {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  margin-right: 8px;
+  background: url('./assets/upload-icon.png') no-repeat center center;
+  background-size: contain;
 }
 
-.read-the-docs {
-  color: #888;
+/* Text below the button */
+.drag-text {
+  display: block;
+  margin-top: 15px;
+  font-size: 14px;
+  color: #555555;
 }

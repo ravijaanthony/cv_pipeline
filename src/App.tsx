@@ -1,10 +1,10 @@
-// import { useState } from "react";
+import React from "react";
 import axios from "axios";
 import DragDropBox from "./DragDropBox";
+import "./App.css";
 
 function App() {
-
-  // Funcition to dropped data to backend
+  // Function to send the dropped/selected file to the backend
   const sendToBackend = async (file: File) => {
     const formData = new FormData();
     formData.append("file", file);
@@ -15,21 +15,15 @@ function App() {
         },
       });
       console.log("File sent:", file);
-    }
-    catch (error) {
+    } catch (error) {
       console.error("Error sending file:", error);
     }
   };
 
   return (
-    <>
-
-      <div style={{ padding: "20px" }}>
-        <DragDropBox sendToBackend={sendToBackend} />
-      </div>
-
-    </>
-
+    <div className="app-container">
+      <DragDropBox sendToBackend={sendToBackend} />
+    </div>
   );
 }
 
