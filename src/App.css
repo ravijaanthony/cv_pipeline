@@ -100,12 +100,13 @@ body, html {
   padding: 8px;
   margin: 5px 0;
   border-radius: 3px;
+  color: #555555;
 }
 
-.message:nth-child(odd) {
+/* .message:nth-child(odd) {
   background-color: #e9f7ef;
 }
 
 .message:nth-child(even) {
   background-color: #f1f1f1;
-}
+} */
