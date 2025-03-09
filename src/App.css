@@ -24,7 +24,8 @@ body, html {
   justify-content: center;
   padding: 20px;
   width: 100vw;
-    height: 100vh;
+  height: 100vh;
+  flex-direction: column;
 }
 
 /* White box styling for the upload area */
@@ -82,4 +83,29 @@ body, html {
   margin-top: 15px;
   font-size: 14px;
   color: #555555;
+}
+
+.message-box {
+  margin-top: 20px;
+  width: 100%;
+  max-width: 400px;
+  height: 80px;
+  padding: 10px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  background-color: #f9f9f9;
+}
+
+.message {
+  padding: 8px;
+  margin: 5px 0;
+  border-radius: 3px;
+}
+
+.message:nth-child(odd) {
+  background-color: #e9f7ef;
+}
+
+.message:nth-child(even) {
+  background-color: #f1f1f1;
 }
