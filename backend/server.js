@@ -11,6 +11,10 @@ import stream from "stream";
 import fs from "fs";
 import nodemailer from "nodemailer";
 import schedule from "node-schedule";
+import { env } from "process";
+import dotenv from 'dotenv';
+
+dotenv.config(); // This loads the .env file
 
 const app = express();
 const PORT = 5000;
@@ -28,13 +32,13 @@ const SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets"
 ];
 const auth = new google.auth.GoogleAuth({
-    keyFile: "./cv-pipeline-01-e5f9b9a2b1be.json", // Update with your credentials file path
+    keyFile: process.env.GOOGLE_API_KEY_FILE, // Update with your credentials file path
     scopes: SCOPES
 });
 
 const drive = google.drive({ version: "v3", auth });
 const sheets = google.sheets({ version: "v4", auth });
-const spreadsheetId = "1c9CHuGUShXbJOumteOmA5L7ZLlVvLi6BenomVbNevN8"; // Replace with your target spreadsheet ID
+const spreadsheetId = process.env.SPREADSHEET_ID; // Replace with your target spreadsheet ID
 
 /**
  * Extracts CV data by splitting text into lines and grouping by section labels.
@@ -157,7 +161,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 
     const fileMetadata = {
         name: req.file.originalname,
-        parents: ["1SyBij1koqegqOFZzG-sIJ4ZMLWkH-q9l"] // Google Drive folder ID
+        parents: [process.env.GOOGLE_DRIVE_FOLDER_ID] // Google Drive folder ID
     };
 
     // Upload the file to Google Drive.
@@ -222,7 +226,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 
     try {
         const externalResponse = await axios.post(
-            "https://rnd-assignment.automations-3d6.workers.dev/",
+            process.env.EXTERNAL_API_URL,
             // "https://httpbin.org/post", // Use this URL for testing
             payload,
             {
@@ -278,10 +282,10 @@ app.post("/upload", upload.single("file"), async (req, res) => {
         // Ensure sendDate is in the future
         if (sendDate > new Date()) {
             const transporter = nodemailer.createTransport({
-                service: "gmail",
+                service: process.env.EMAIL_SERVICE,
                 auth: {
-                    user: "service.test.services@gmail.com",
-                    pass: "yfij yirp ybai hbtd"
+                    user: process.env.EMAIL_USER,
+                    pass: process.env.EMAIL_PASS
                 }
             });
 
