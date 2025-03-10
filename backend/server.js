@@ -11,13 +11,29 @@ import stream from "stream";
 import fs from "fs";
 import nodemailer from "nodemailer";
 import schedule from "node-schedule";
+import { Storage } from '@google-cloud/storage';
+import dotenv from "dotenv";
+
+dotenv.config();
+
+if (!process.env.GOOGLE_SERVICE_ACCOUNT_BASE64) {
+    throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_BASE64 environment variable");
+}
+const keyFile = JSON.parse(
+    Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_BASE64, 'base64').toString()
+);
+
+const storageKey = new Storage({
+    projectId: keyFile.project_id,
+    credentials: keyFile
+});
 
 const app = express();
 const PORT = 5000;
 
 app.use(cors({
-    origin: 'https://cv-pipeline-frontend-8a53s4vkk-ravijaanthonys-projects.vercel.app'
-
+    // origin: 'https://cv-pipeline-frontend-8a53s4vkk-ravijaanthonys-projects.vercel.app'
+    // origin: 'http://localhost:5000'
 }));
 app.use(bodyParser.json());
 
@@ -31,7 +47,7 @@ const SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets"
 ];
 const auth = new google.auth.GoogleAuth({
-    keyFile: "./cv-pipeline-01-92372bcf22b4.json", // Update with your credentials file path
+    keyFile: keyFile, // Update with your credentials file path
     scopes: SCOPES
 });
 
@@ -349,7 +365,7 @@ app.get("/", (req, res) => {
     res.send({ "server": "running" });
 });
 
-// app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 export default app;
 

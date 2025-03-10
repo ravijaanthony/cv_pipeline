@@ -8,6 +8,22 @@ import mammoth from "mammoth";
 import stream from "stream";
 import fs from "fs";
 import axios from "axios";
+import { Storage } from '@google-cloud/storage';
+import dotenv from "dotenv";
+
+dotenv.config();
+
+if (!process.env.GOOGLE_SERVICE_ACCOUNT_BASE64) {
+    throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_BASE64 environment variable");
+}
+const keyFile = JSON.parse(
+    Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_BASE64, 'base64').toString()
+);
+
+const storageKey = new Storage({
+    projectId: keyFile.project_id,
+    credentials: keyFile
+});
 
 // Example function for extracting data from the CV text
 function extractCVData(text) {
@@ -82,7 +98,7 @@ const SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets"
 ];
 const auth = new google.auth.GoogleAuth({
-    keyFile: "./cv-pipeline-01-92372bcf22b4.json",
+    keyFile: keyFile,
     scopes: SCOPES
 });
 const drive = google.drive({ version: "v3", auth });

@@ -12,11 +12,15 @@ function App() {
     const formData = new FormData();
     formData.append("file", file);
     try {
-      await axios.post(`${import.meta.env.VITE_REACT_APP_API_URL}/api/upload`, formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
-      });
+      await axios.post(
+        `${import.meta.env.VITE_REACT_APP_API_URL}/api/upload`,
+        
+        formData,
+        {
+          headers: {
+            "Content-Type": "multipart/form-data",
+          },
+        });
       console.log("File sent:", file);
 
       setMessages((prevMessages) => [

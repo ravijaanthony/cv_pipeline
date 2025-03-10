@@ -24,3 +24,4 @@ dist-ssr
 *.sw?
 
 cv-pipeline-01-e5f9b9a2b1be.json
+.env
