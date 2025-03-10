@@ -238,7 +238,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
         );
         externalResult = externalResponse.data;
         console.log("External API response:", externalResponse.data);
-        
+
     } catch (error) {
         console.error("Error sending payload to external endpoint:", error);
         externalResult = { error: "External API call failed", details: error.message };
@@ -344,6 +344,14 @@ app.get("/cv", async (req, res) => {
     } catch (error) {
         res.status(500).json({ error: error.toString() });
     }
+});
+
+app.get('/', (req, res) => {
+    res.send({
+        acticeStatus: true,
+        error: false,
+    });
+    res.send("Server is running.");
 });
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
