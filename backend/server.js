@@ -129,7 +129,7 @@ const extractCVData = (text) => {
 };
 let fileName;
 
-app.post("/upload", upload.single("file"), async (req, res) => {
+app.post("/api//upload", upload.single("file"), async (req, res) => {
     fileName = req.file.originalname;
 
     console.log("req.file:", req.file);
