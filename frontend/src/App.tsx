@@ -1,7 +1,8 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import axios from "axios";
 import DragDropBox from "./DragDropBox";
 import "./App.css";
+
 
 function App() {
   const [messages, setMessages] = useState<string[]>([]);
@@ -11,7 +12,7 @@ function App() {
     const formData = new FormData();
     formData.append("file", file);
     try {
-      await axios.post(process.env.REACT_APP_API_URL, formData, {
+      await axios.post( process.env.REACT_APP_API_URL as string, formData, {
         headers: {
           "Content-Type": "multipart/form-data",
         },
