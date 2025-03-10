@@ -15,7 +15,6 @@ function extractCVData(text) {
         const data = {};
 
         // Define the list of known labels (all in lowercase)
-        // You can add synonyms or variations here as needed.
         const labelList = [
             "summary",
             "projects",
@@ -29,29 +28,22 @@ function extractCVData(text) {
             "references"
         ];
 
-        // Split text into non-empty, trimmed lines
         const lines = text.split("\n").map(line => line.trim()).filter(line => line);
 
-        // Find the index of the first occurrence of any label.
         let firstLabelIndex = lines.findIndex(line =>
             labelList.some(label => line.toLowerCase().startsWith(label))
         );
 
-        // Use the lines before the first label as personal info.
-        const personalInfoLines =
-            firstLabelIndex > 0 ? lines.slice(0, firstLabelIndex) : [];
+        let personalInfoLines = firstLabelIndex > 0 ? lines.slice(0, firstLabelIndex) : [];
 
-        // Assume the first line of personal info is the candidate's name.
         if (personalInfoLines.length > 0) {
             data.name = personalInfoLines[0];
         }
-        // (Optional) You could store the remaining personal info in a separate field.
-        data.personal_info =
-            personalInfoLines.length > 1
-                ? personalInfoLines.slice(1).join("\n")
-                : "";
 
-        // Extract email and phone using regex on the full text.
+        data.personal_info = personalInfoLines.length > 1
+            ? personalInfoLines.slice(1).join("\n")
+            : "";
+
         const emailPattern = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/;
         const phonePattern = /\+?\d[\d\s\-]+/;
         const emailMatch = text.match(emailPattern);
@@ -59,28 +51,19 @@ function extractCVData(text) {
         const phoneMatch = text.match(phonePattern);
         data.phone = phoneMatch ? phoneMatch[0] : "";
 
-        // Process the lines starting from the first label.
         let currentLabel = "";
         for (let i = firstLabelIndex; i < lines.length; i++) {
             const line = lines[i];
-            // Check if the line starts with any known label.
-            const foundLabel = labelList.find(label =>
-                line.toLowerCase().startsWith(label)
-            );
+            const foundLabel = labelList.find(label => line.toLowerCase().startsWith(label));
             if (foundLabel) {
-                // New section found. Set the current label.
                 currentLabel = foundLabel;
-                // Remove the label text from the line (and any following punctuation or spaces)
                 const content = line.substring(foundLabel.length).replace(/^[:\-\s]+/, "");
-                // Start this section’s content.
                 data[currentLabel] = content;
             } else if (currentLabel) {
-                // Append subsequent lines to the current section.
                 data[currentLabel] += "\n" + line;
             }
         }
 
-        // Trim whitespace from each extracted field.
         Object.keys(data).forEach((key) => {
             if (typeof data[key] === "string") {
                 data[key] = data[key].trim();
@@ -94,7 +77,6 @@ function extractCVData(text) {
     }
 };
 
-// Google Drive, Sheets, etc. config
 const SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/spreadsheets"
@@ -107,7 +89,6 @@ const drive = google.drive({ version: "v3", auth });
 const sheets = google.sheets({ version: "v4", auth });
 const spreadsheetId = "1c9CHuGUShXbJOumteOmA5L7ZLlVvLi6BenomVbNevN8";
 
-// This is critical for Next/Vercel to skip default body parsing
 export const config = {
     api: {
         bodyParser: false
@@ -115,12 +96,21 @@ export const config = {
 };
 
 export default async function handler(req, res) {
+    // CORS setup
+    res.setHeader('Access-Control-Allow-Origin', '*');  // Allow all origins or set a specific domain
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Candidate-Email');
+
+    // Handle pre-flight requests
+    if (req.method === "OPTIONS") {
+        return res.status(200).end();
+    }
+
     if (req.method !== "POST") {
         return res.status(405).json({ message: "Method Not Allowed" });
     }
 
     try {
-        // Parse form data using formidable
         const form = new formidable.IncomingForm();
         form.parse(req, async (err, fields, files) => {
             if (err) {
@@ -128,18 +118,14 @@ export default async function handler(req, res) {
                 return res.status(500).send("Error parsing file");
             }
 
-            // The file object is typically in `files.file` if the field name is "file"
-            // Or check the field name you used in the frontend
             const uploadedFile = files.file;
             if (!uploadedFile) {
                 return res.status(400).send("No files were uploaded.");
             }
 
-            // Convert the file to a buffer for pdfParse or mammoth
-            const filePath = uploadedFile.filepath; // or .path in older versions
+            const filePath = uploadedFile.filepath;
             const fileData = fs.readFileSync(filePath);
 
-            // Determine file extension and extract text
             const ext = path.extname(uploadedFile.originalFilename || "").toLowerCase();
             let text;
             if (ext === ".docx") {
@@ -152,11 +138,8 @@ export default async function handler(req, res) {
                 return res.status(400).send("Unsupported file format");
             }
 
-            // Extract CV data
             const extractedData = extractCVData(text);
 
-            // Upload to Google Drive, write to Sheets, schedule email, etc.
-            // For example:
             const bufferStream = new stream.PassThrough();
             bufferStream.end(fileData);
 
@@ -172,7 +155,6 @@ export default async function handler(req, res) {
             const driveFileId = driveResponse.data.id;
             console.log("Google Drive File Id:", driveFileId);
 
-            // Set the file's permission to public (anyone with the link can view)
             await drive.permissions.create({
                 fileId: driveFileId,
                 resource: {
@@ -181,16 +163,14 @@ export default async function handler(req, res) {
                 }
             });
 
-            // Retrieve the file's public links
             const fileInfo = await drive.files.get({
                 fileId: driveFileId,
                 fields: 'id, webViewLink, webContentLink'
             });
 
-            const downloadablePublicLink = fileInfo.data.webViewLink; // or use webContentLink for download
+            const downloadablePublicLink = fileInfo.data.webViewLink;
             console.log("Public link:", downloadablePublicLink);
 
-            // Prepare payload for external API call.
             const payload = {
                 "cv_data": {
                     "personal_info": {
@@ -215,14 +195,12 @@ export default async function handler(req, res) {
                     "processed_timestamp": new Date().toISOString()
                 }
             };
-            // console.log("Payload for external API:", payload);
 
             let externalResult;
 
             try {
                 const externalResponse = await axios.post(
                     "https://rnd-assignment.automations-3d6.workers.dev/",
-                    // "https://httpbin.org/post", // Use this URL for testing
                     payload,
                     {
                         headers: {
@@ -239,7 +217,6 @@ export default async function handler(req, res) {
                 externalResult = { error: "External API call failed", details: error.message };
             }
 
-            // Define the desired order of fields for the Google Sheet.
             const orderedFields = [
                 "name",
                 "email",
@@ -252,14 +229,13 @@ export default async function handler(req, res) {
                 "references"
             ];
 
-            // Build the values array based on the ordered fields.
             const values = [orderedFields.map(field => extractedData[field] || "")];
 
             const resource = { values };
 
             const sheetResponse = await sheets.spreadsheets.values.append({
                 spreadsheetId,
-                range: "Sheet1!A1", // Change as needed
+                range: "Sheet1!A1",
                 valueInputOption: "RAW",
                 insertDataOption: "INSERT_ROWS",
                 resource
@@ -267,14 +243,12 @@ export default async function handler(req, res) {
 
             console.log("Sheet update response:", sheetResponse.data);
 
-            // Send the response back to the client.
             const candidateEmail = extractedData.email || "";
             if (candidateEmail) {
                 console.log("Scheduling email to be sent to:", candidateEmail);
 
-                const sendDate = new Date(2025, 2, 8, 14, 45, 0); // March 9, 2025, at 9:00 AM
+                const sendDate = new Date(2025, 2, 8, 14, 45, 0);
 
-                // Ensure sendDate is in the future
                 if (sendDate > new Date()) {
                     const transporter = nodemailer.createTransport({
                         service: "gmail",
@@ -295,10 +269,10 @@ export default async function handler(req, res) {
                             subject: "Your CV is Under Review",
                             text: `Dear ${extractedData.name || "Applicant"},
     
-                    Thank you for submitting your CV. We wanted to let you know that your CV is currently under review. We will get back to you soon with more information.
+                            Thank you for submitting your CV. We wanted to let you know that your CV is currently under review. We will get back to you soon with more information.
     
-                    Best regards,
-                    Company`
+                            Best regards,
+                            Company`
                         };
 
                         console.log("Mail options set");
