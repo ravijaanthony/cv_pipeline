@@ -15,7 +15,10 @@ import schedule from "node-schedule";
 const app = express();
 const PORT = 5000;
 
-app.use(cors());
+app.use(cors({
+    origin: 'https://cv-pipeline-frontend-8a53s4vkk-ravijaanthonys-projects.vercel.app'
+
+}));
 app.use(bodyParser.json());
 
 // Use memory storage so that we can work directly with the file buffer
@@ -234,7 +237,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
         );
         externalResult = externalResponse.data;
         console.log("External API response:", externalResponse.data);
-        
+
     } catch (error) {
         console.error("Error sending payload to external endpoint:", error);
         externalResult = { error: "External API call failed", details: error.message };
@@ -343,7 +346,7 @@ app.get("/cv", async (req, res) => {
 });
 
 app.get("/", (req, res) => {
-    res.send({"server": "running"});
+    res.send({ "server": "running" });
 });
 
 // app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
