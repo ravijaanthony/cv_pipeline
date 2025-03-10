@@ -342,6 +342,10 @@ app.get("/cv", async (req, res) => {
     }
 });
 
+app.get("/", (req, res) => {
+    res.send({"server": "running"});
+});
+
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 export default app;
