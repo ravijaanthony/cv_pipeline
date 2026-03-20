@@ -1,10 +1,10 @@
 import React, { useRef, useState } from "react";
 
 interface DragDropBoxProps {
-  sendToBackend: (file: File) => void;
+  onFileSelected: (file: File) => void;
 }
 
-const DragDropBox: React.FC<DragDropBoxProps> = ({ sendToBackend }) => {
+const DragDropBox: React.FC<DragDropBoxProps> = ({ onFileSelected }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragActive, setIsDragActive] = useState(false);
 
@@ -21,7 +21,7 @@ const DragDropBox: React.FC<DragDropBoxProps> = ({ sendToBackend }) => {
     setIsDragActive(false);
     const file = event.dataTransfer.files[0];
     if (file) {
-      sendToBackend(file);
+      onFileSelected(file);
       event.dataTransfer.clearData();
     }
   };
@@ -29,7 +29,7 @@ const DragDropBox: React.FC<DragDropBoxProps> = ({ sendToBackend }) => {
   // Handle file selection via click
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     if (event.target.files && event.target.files.length > 0) {
-      sendToBackend(event.target.files[0]);
+      onFileSelected(event.target.files[0]);
     }
   };
 

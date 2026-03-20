@@ -42,11 +42,14 @@ const googleCredentials = loadGoogleCredentials();
 
 const driveFolderId = requiredEnv("GOOGLE_DRIVE_FOLDER_ID");
 const spreadsheetId = requiredEnv("SPREADSHEET_ID");
-const externalApiUrl = requiredEnv("EXTERNAL_API_URL");
+// const externalApiUrl = requiredEnv("EXTERNAL_API_URL");
 const externalApiCandidateEmail = requiredEnv("EXTERNAL_API_CANDIDATE_EMAIL");
 const emailService = requiredEnv("EMAIL_SERVICE");
 const emailUser = requiredEnv("EMAIL_USER");
 const emailPass = requiredEnv("EMAIL_PASS");
+const emailDelayMinutes = Number.isFinite(Number(process.env.EMAIL_SEND_DELAY_MINUTES))
+    ? Number(process.env.EMAIL_SEND_DELAY_MINUTES)
+    : 0;
 
 const storageKey = new Storage({
     projectId: googleCredentials.project_id,
@@ -56,7 +59,7 @@ const storageKey = new Storage({
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 5001;
 
 // app.use(cors({
 //     // origin: 'https://cv-pipeline-frontend-8a53s4vkk-ravijaanthonys-projects.vercel.app'
@@ -171,157 +174,120 @@ const extractCVData = (text) => {
 let fileName;
 
 app.post("/upload", upload.single("file"), async (req, res) => {
-    fileName = req.file.originalname;
-
-    console.log("req.file:", req.file);
-    if (!req.file) {
-        return res.status(400).send("No files were uploaded.");
-    }
-
-    // try {
-    const fileExtension = path.extname(req.file.originalname).toLowerCase();
-    let fileData;
-
-    if (fileExtension === ".docx") {
-        const result = await mammoth.extractRawText({ buffer: req.file.buffer });
-        fileData = result.value;
-    } else if (fileExtension === ".pdf") {
-        const pdfResult = await pdfParse(req.file.buffer);
-        fileData = pdfResult.text;
-    } else {
-        return res.status(400).send("Unsupported file format");
-    }
-
-    console.log("Full extracted text:", fileData);
-    const extractedData = extractCVData(fileData);
-    console.log("Extracted data:", extractedData);
-
-    // Convert the file buffer to a readable stream for Drive upload.
-    const bufferStream = new stream.PassThrough();
-    bufferStream.end(req.file.buffer);
-
-    const fileMetadata = {
-        name: req.file.originalname,
-        parents: [driveFolderId]
-    };
-
-    // Upload the file to Google Drive.
-    const driveResponse = await drive.files.create({
-        resource: fileMetadata,
-        media: {
-            mimeType: req.file.mimetype,
-            body: bufferStream
-        },
-        fields: "id"
-    });
-
-    const driveFileId = driveResponse.data.id;
-    console.log("Google Drive File Id:", driveFileId);
-
-    // Set the file's permission to public (anyone with the link can view)
-    await drive.permissions.create({
-        fileId: driveFileId,
-        resource: {
-            role: 'reader',
-            type: 'anyone'
-        }
-    });
-
-    // Retrieve the file's public links
-    const fileInfo = await drive.files.get({
-        fileId: driveFileId,
-        fields: 'id, webViewLink, webContentLink'
-    });
-
-    const downloadablePublicLink = fileInfo.data.webViewLink; // or use webContentLink for download
-    console.log("Public link:", downloadablePublicLink);
-
-    // Prepare payload for external API call.
-    const payload = {
-        "cv_data": {
-            "personal_info": {
-                name: extractedData.name || "",
-                email: extractedData.email || "",
-                phone: extractedData.phone || ""
-            },
-            "education": extractedData.education ? [extractedData.education] : [],
-            "qualifications": extractedData.qualifications
-                ? (Array.isArray(extractedData.qualifications)
-                    ? extractedData.qualifications
-                    : [extractedData.qualifications])
-                : [],
-            "projects": extractedData.projects ? [extractedData.projects] : [],
-            "cv_public_link": downloadablePublicLink
-        },
-        "metadata": {
-            "applicant_name": extractedData.name || "",
-            "email": extractedData.email || "",
-            "status": "prod",
-            "cv_processed": true,
-            "processed_timestamp": new Date().toISOString()
+    const processingLog = [];
+    const logStep = (step, details = {}, level = "info") => {
+        const entry = {
+            step,
+            level,
+            timestamp: new Date().toISOString(),
+            details
+        };
+        processingLog.push(entry);
+        const logFn = level === "error" ? console.error : console.log;
+        if (Object.keys(details).length > 0) {
+            logFn(`[${entry.timestamp}] ${step}`, details);
+        } else {
+            logFn(`[${entry.timestamp}] ${step}`);
         }
     };
-    // console.log("Payload for external API:", payload);
-
-    let externalResult;
 
     try {
-        const externalResponse = await axios.post(
-            externalApiUrl,
-            // "https://httpbin.org/post", // Use this URL for testing
-            payload,
-            {
-                headers: {
-                    "Content-Type": "application/json",
-                    "X-Candidate-Email": externalApiCandidateEmail
-                }
+        logStep("upload_received");
+        if (!req.file) {
+            logStep("upload_missing_file", {}, "error");
+            return res.status(400).json({ message: "No files were uploaded.", processingLog });
+        }
+
+        fileName = req.file.originalname;
+        logStep("file_received", { filename: req.file.originalname, size: req.file.size });
+
+        const fileExtension = path.extname(req.file.originalname).toLowerCase();
+        let fileData;
+
+        if (fileExtension === ".docx") {
+            const result = await mammoth.extractRawText({ buffer: req.file.buffer });
+            fileData = result.value;
+        } else if (fileExtension === ".pdf") {
+            const pdfResult = await pdfParse(req.file.buffer);
+            fileData = pdfResult.text;
+        } else {
+            logStep("unsupported_file_format", { extension: fileExtension }, "error");
+            return res.status(400).json({ message: "Unsupported file format", processingLog });
+        }
+
+        logStep("file_parsed", { extension: fileExtension });
+        const extractedData = extractCVData(fileData);
+        logStep("cv_extracted");
+
+        // Convert the file buffer to a readable stream for Drive upload.
+        const bufferStream = new stream.PassThrough();
+        bufferStream.end(req.file.buffer);
+
+        const fileMetadata = {
+            name: req.file.originalname,
+            parents: [driveFolderId]
+        };
+
+        logStep("drive_upload_started");
+        const driveResponse = await drive.files.create({
+            resource: fileMetadata,
+            media: {
+                mimeType: req.file.mimetype,
+                body: bufferStream
+            },
+            fields: "id"
+        });
+
+        const driveFileId = driveResponse.data.id;
+        logStep("drive_uploaded", { fileId: driveFileId });
+
+        await drive.permissions.create({
+            fileId: driveFileId,
+            resource: {
+                role: 'reader',
+                type: 'anyone'
             }
-        );
-        externalResult = externalResponse.data;
-        console.log("External API response:", externalResponse.data);
+        });
+        logStep("drive_permissions_set");
 
-    } catch (error) {
-        console.error("Error sending payload to external endpoint:", error);
-        externalResult = { error: "External API call failed", details: error.message };
-    }
+        const fileInfo = await drive.files.get({
+            fileId: driveFileId,
+            fields: 'id, webViewLink, webContentLink'
+        });
 
-    // Define the desired order of fields for the Google Sheet.
-    const orderedFields = [
-        "name",
-        "email",
-        "phone",
-        "summary",
-        "projects",
-        "experience",
-        "education",
-        "achievements",
-        "references"
-    ];
+        const downloadablePublicLink = fileInfo.data.webViewLink;
+        logStep("drive_link_ready");
 
-    // Build the values array based on the ordered fields.
-    const values = [orderedFields.map(field => extractedData[field] || "")];
+        const orderedFields = [
+            "name",
+            "email",
+            "phone",
+            "summary",
+            "projects",
+            "experience",
+            "education",
+            "achievements",
+            "references"
+        ];
 
-    const resource = { values };
+        const values = [orderedFields.map(field => extractedData[field] || "")];
+        const resource = { values };
 
-    const sheetResponse = await sheets.spreadsheets.values.append({
-        spreadsheetId,
-        range: "Sheet1!A1", // Change as needed
-        valueInputOption: "RAW",
-        insertDataOption: "INSERT_ROWS",
-        resource
-    });
+        logStep("sheet_append_started");
+        const sheetResponse = await sheets.spreadsheets.values.append({
+            spreadsheetId,
+            range: "Sheet1!A1",
+            valueInputOption: "RAW",
+            insertDataOption: "INSERT_ROWS",
+            resource
+        });
+        logStep("sheet_append_success", {
+            updatedRange: sheetResponse.data?.updates?.updatedRange
+        });
 
-    console.log("Sheet update response:", sheetResponse.data);
-
-    // Send the response back to the client.
-    const candidateEmail = extractedData.email || "";
-    if (candidateEmail) {
-        console.log("Scheduling email to be sent to:", candidateEmail);
-
-        const sendDate = new Date(2025, 2, 8, 14, 45, 0); // March 9, 2025, at 9:00 AM
-
-        // Ensure sendDate is in the future
-        if (sendDate > new Date()) {
+        const candidateEmail = extractedData.email || "";
+        let emailStatus = { status: "skipped", reason: "no_candidate_email" };
+        if (candidateEmail) {
             const transporter = nodemailer.createTransport({
                 service: emailService,
                 auth: {
@@ -330,49 +296,65 @@ app.post("/upload", upload.single("file"), async (req, res) => {
                 }
             });
 
-            console.log("Transporter set");
-
-            schedule.scheduleJob(sendDate, async function () {
-                console.log("Scheduler triggered at:", new Date());
-
-                const mailOptions = {
-                    from: emailUser,
-                    to: candidateEmail,
-                    subject: "Your CV is Under Review",
-                    text: `Dear ${extractedData.name || "Applicant"},
+            const mailOptions = {
+                from: emailUser,
+                to: candidateEmail,
+                subject: "Your CV is Under Review",
+                text: `Dear ${extractedData.name || "Applicant"},
     
-                    Thank you for submitting your CV. We wanted to let you know that your CV is currently under review. We will get back to you soon with more information.
+                Thank you for submitting your CV. We wanted to let you know that your CV is currently under review. We will get back to you soon with more information.
     
-                    Best regards,
-                    Company`
-                };
+                Best regards,
+                Company`
+            };
 
-                console.log("Mail options set");
+            const delayMs = emailDelayMinutes > 0 ? emailDelayMinutes * 60 * 1000 : 0;
+            if (delayMs > 0) {
+                const sendDate = new Date(Date.now() + delayMs);
+                logStep("email_scheduled", { sendAt: sendDate.toISOString(), delayMinutes: emailDelayMinutes });
 
+                schedule.scheduleJob(sendDate, async function () {
+                    console.log(`[${new Date().toISOString()}] email_send_started`);
+                    try {
+                        let info = await transporter.sendMail(mailOptions);
+                        console.log(`[${new Date().toISOString()}] email_sent_success`, info.response);
+                    } catch (error) {
+                        console.error(`[${new Date().toISOString()}] email_send_failed`, error);
+                    }
+                });
+
+                emailStatus = { status: "scheduled", sendAt: sendDate.toISOString() };
+            } else {
+                logStep("email_send_started");
                 try {
                     let info = await transporter.sendMail(mailOptions);
-                    console.log("Email sent successfully:", info.response);
+                    emailStatus = { status: "sent", response: info.response };
+                    logStep("email_sent_success");
                 } catch (error) {
-                    console.error("Error sending email:", error);
+                    emailStatus = { status: "failed", error: error.message };
+                    logStep("email_send_failed", { error: error.message }, "error");
                 }
-            });
-
-            console.log("Job scheduled for:", sendDate);
+            }
         } else {
-            console.error("Scheduled date is in the past. Please choose a future date.");
+            logStep("email_skipped", { reason: "no_candidate_email" });
         }
+
+        res.json({
+            message: "File processed successfully",
+            fileId: driveFileId,
+            extractedData,
+            sheetResponse: sheetResponse.data,
+            downloadablePublicLink,
+            processingLog,
+            status: {
+                sheetAppend: { success: true },
+                email: emailStatus
+            }
+        });
+    } catch (error) {
+        logStep("upload_failed", { error: error.message }, "error");
+        res.status(500).json({ message: "Upload failed", error: error.message, processingLog });
     }
-
-
-    res.json({
-        message: "File processed successfully",
-        fileId: driveFileId,
-        extractedData,
-        externalResult,
-        sheetResponse: sheetResponse.data,
-        downloadablePublicLink
-    });
-    //  );
 });
 
 app.get("/cv", async (req, res) => {
