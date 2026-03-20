@@ -13,16 +13,41 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-if (!process.env.GOOGLE_SERVICE_ACCOUNT_BASE64) {
-    throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_BASE64 environment variable");
-}
-const keyFile = JSON.parse(
-    Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_BASE64, 'base64').toString()
-);
+const requiredEnv = (name) => {
+    const value = process.env[name];
+    if (!value) {
+        throw new Error(`Missing ${name} environment variable`);
+    }
+    return value;
+};
+
+const loadGoogleCredentials = () => {
+    const base64 = process.env.GOOGLE_SERVICE_ACCOUNT_BASE64;
+    if (base64) {
+        return JSON.parse(Buffer.from(base64, "base64").toString("utf8"));
+    }
+
+    const keyFilePath = process.env.GOOGLE_API_KEY_FILE;
+    if (keyFilePath) {
+        return JSON.parse(fs.readFileSync(keyFilePath, "utf8"));
+    }
+
+    throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_BASE64 or GOOGLE_API_KEY_FILE environment variable");
+};
+
+const googleCredentials = loadGoogleCredentials();
+
+const driveFolderId = requiredEnv("GOOGLE_DRIVE_FOLDER_ID");
+const spreadsheetId = requiredEnv("SPREADSHEET_ID");
+const externalApiUrl = requiredEnv("EXTERNAL_API_URL");
+const externalApiCandidateEmail = requiredEnv("EXTERNAL_API_CANDIDATE_EMAIL");
+const emailService = requiredEnv("EMAIL_SERVICE");
+const emailUser = requiredEnv("EMAIL_USER");
+const emailPass = requiredEnv("EMAIL_PASS");
 
 const storageKey = new Storage({
-    projectId: keyFile.project_id,
-    credentials: keyFile
+    projectId: googleCredentials.project_id,
+    credentials: googleCredentials
 });
 
 // Example function for extracting data from the CV text
@@ -98,12 +123,11 @@ const SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets"
 ];
 const auth = new google.auth.GoogleAuth({
-    keyFile: keyFile,
+    credentials: googleCredentials,
     scopes: SCOPES
 });
 const drive = google.drive({ version: "v3", auth });
 const sheets = google.sheets({ version: "v4", auth });
-const spreadsheetId = "1c9CHuGUShXbJOumteOmA5L7ZLlVvLi6BenomVbNevN8";
 
 export const config = {
     api: {
@@ -161,7 +185,7 @@ export default async function handler(req, res) {
 
             const fileMetadata = {
                 name: uploadedFile.originalFilename,
-                parents: ["1SyBij1koqegqOFZzG-sIJ4ZMLWkH-q9l"]
+                parents: [driveFolderId]
             };
             const driveResponse = await drive.files.create({
                 resource: fileMetadata,
@@ -216,12 +240,12 @@ export default async function handler(req, res) {
 
             try {
                 const externalResponse = await axios.post(
-                    "https://rnd-assignment.automations-3d6.workers.dev/",
+                    externalApiUrl,
                     payload,
                     {
                         headers: {
                             "Content-Type": "application/json",
-                            "X-Candidate-Email": "ravijaanthony@gmail.com"
+                            "X-Candidate-Email": externalApiCandidateEmail
                         }
                     }
                 );
@@ -267,10 +291,10 @@ export default async function handler(req, res) {
 
                 if (sendDate > new Date()) {
                     const transporter = nodemailer.createTransport({
-                        service: "gmail",
+                        service: emailService,
                         auth: {
-                            user: "service.test.services@gmail.com",
-                            pass: "yfij yirp ybai hbtd"
+                            user: emailUser,
+                            pass: emailPass
                         }
                     });
 
@@ -280,7 +304,7 @@ export default async function handler(req, res) {
                         console.log("Scheduler triggered at:", new Date());
 
                         const mailOptions = {
-                            from: "service.test.services@gmail.com",
+                            from: emailUser,
                             to: candidateEmail,
                             subject: "Your CV is Under Review",
                             text: `Dear ${extractedData.name || "Applicant"},

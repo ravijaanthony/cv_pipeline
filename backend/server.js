@@ -14,24 +14,49 @@ import schedule from "node-schedule";
 import { Storage } from '@google-cloud/storage';
 import dotenv from "dotenv";
 
-app.use(cors());
-app.use(bodyParser.json());
 dotenv.config();
 
-if (!process.env.GOOGLE_SERVICE_ACCOUNT_BASE64) {
-    throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_BASE64 environment variable");
-}
-const keyFile = JSON.parse(
-    Buffer.from(process.env.GOOGLE_SERVICE_ACCOUNT_BASE64, 'base64').toString()
-);
+const requiredEnv = (name) => {
+    const value = process.env[name];
+    if (!value) {
+        throw new Error(`Missing ${name} environment variable`);
+    }
+    return value;
+};
+
+const loadGoogleCredentials = () => {
+    const base64 = process.env.GOOGLE_SERVICE_ACCOUNT_BASE64;
+    if (base64) {
+        return JSON.parse(Buffer.from(base64, "base64").toString("utf8"));
+    }
+
+    const keyFilePath = process.env.GOOGLE_API_KEY_FILE;
+    if (keyFilePath) {
+        return JSON.parse(fs.readFileSync(keyFilePath, "utf8"));
+    }
+
+    throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_BASE64 or GOOGLE_API_KEY_FILE environment variable");
+};
+
+const googleCredentials = loadGoogleCredentials();
+
+const driveFolderId = requiredEnv("GOOGLE_DRIVE_FOLDER_ID");
+const spreadsheetId = requiredEnv("SPREADSHEET_ID");
+const externalApiUrl = requiredEnv("EXTERNAL_API_URL");
+const externalApiCandidateEmail = requiredEnv("EXTERNAL_API_CANDIDATE_EMAIL");
+const emailService = requiredEnv("EMAIL_SERVICE");
+const emailUser = requiredEnv("EMAIL_USER");
+const emailPass = requiredEnv("EMAIL_PASS");
 
 const storageKey = new Storage({
-    projectId: keyFile.project_id,
-    credentials: keyFile
+    projectId: googleCredentials.project_id,
+    credentials: googleCredentials
 });
 
 const app = express();
-const PORT = 5000;
+app.use(cors());
+app.use(bodyParser.json());
+const PORT = process.env.PORT || 5000;
 
 // app.use(cors({
 //     // origin: 'https://cv-pipeline-frontend-8a53s4vkk-ravijaanthonys-projects.vercel.app'
@@ -49,13 +74,12 @@ const SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets"
 ];
 const auth = new google.auth.GoogleAuth({
-    keyFile: keyFile, // Update with your credentials file path
+    credentials: googleCredentials,
     scopes: SCOPES
 });
 
 const drive = google.drive({ version: "v3", auth });
 const sheets = google.sheets({ version: "v4", auth });
-const spreadsheetId = "1c9CHuGUShXbJOumteOmA5L7ZLlVvLi6BenomVbNevN8"; // Replace with your target spreadsheet ID
 
 /**
  * Extracts CV data by splitting text into lines and grouping by section labels.
@@ -178,7 +202,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 
     const fileMetadata = {
         name: req.file.originalname,
-        parents: ["1SyBij1koqegqOFZzG-sIJ4ZMLWkH-q9l"] // Google Drive folder ID
+        parents: [driveFolderId]
     };
 
     // Upload the file to Google Drive.
@@ -243,13 +267,13 @@ app.post("/upload", upload.single("file"), async (req, res) => {
 
     try {
         const externalResponse = await axios.post(
-            "https://rnd-assignment.automations-3d6.workers.dev/",
+            externalApiUrl,
             // "https://httpbin.org/post", // Use this URL for testing
             payload,
             {
                 headers: {
                     "Content-Type": "application/json",
-                    "X-Candidate-Email": "ravijaanthony@gmail.com"
+                    "X-Candidate-Email": externalApiCandidateEmail
                 }
             }
         );
@@ -299,10 +323,10 @@ app.post("/upload", upload.single("file"), async (req, res) => {
         // Ensure sendDate is in the future
         if (sendDate > new Date()) {
             const transporter = nodemailer.createTransport({
-                service: "gmail",
+                service: emailService,
                 auth: {
-                    user: "service.test.services@gmail.com",
-                    pass: "yfij yirp ybai hbtd"
+                    user: emailUser,
+                    pass: emailPass
                 }
             });
 
@@ -312,7 +336,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
                 console.log("Scheduler triggered at:", new Date());
 
                 const mailOptions = {
-                    from: "service.test.services@gmail.com",
+                    from: emailUser,
                     to: candidateEmail,
                     subject: "Your CV is Under Review",
                     text: `Dear ${extractedData.name || "Applicant"},
@@ -370,4 +394,3 @@ app.get("/", (req, res) => {
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 
 export default app;
-

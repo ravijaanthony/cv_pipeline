@@ -3,22 +3,50 @@ import request from "supertest";
 import { expect } from "chai";
 import app from "../server.js"; // adjust the path to your main server file
 import path from "path";
+import fs from "fs";
 import { google } from "googleapis";
 import { fileURLToPath } from 'url';
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const requiredEnv = (name) => {
+    const value = process.env[name];
+    if (!value) {
+        throw new Error(`Missing ${name} environment variable`);
+    }
+    return value;
+};
+
+const loadGoogleCredentials = () => {
+    const base64 = process.env.GOOGLE_SERVICE_ACCOUNT_BASE64;
+    if (base64) {
+        return JSON.parse(Buffer.from(base64, "base64").toString("utf8"));
+    }
+
+    const keyFilePath = process.env.GOOGLE_API_KEY_FILE;
+    if (keyFilePath) {
+        return JSON.parse(fs.readFileSync(keyFilePath, "utf8"));
+    }
+
+    throw new Error("Missing GOOGLE_SERVICE_ACCOUNT_BASE64 or GOOGLE_API_KEY_FILE environment variable");
+};
+
+const googleCredentials = loadGoogleCredentials();
+const spreadsheetId = requiredEnv("SPREADSHEET_ID");
 
 const SCOPES = [
     'https://www.googleapis.com/auth/drive.file',
     'https://www.googleapis.com/auth/spreadsheets'
 ];
 const auth = new google.auth.GoogleAuth({
-    keyFile: './cv-pipeline-01-92372bcf22b4.json',
+    credentials: googleCredentials,
     scopes: SCOPES,
 });
 const sheets = google.sheets({ version: 'v4', auth });
-const spreadsheetId = '1c9CHuGUShXbJOumteOmA5L7ZLlVvLi6BenomVbNevN8';
 
 async function getLastRow() {
     const range = "Sheet1!A:H";
