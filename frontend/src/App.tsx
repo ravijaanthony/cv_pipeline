@@ -13,7 +13,7 @@ function App() {
     formData.append("file", file);
     try {
       await axios.post(
-        `${import.meta.env.VITE_REACT_APP_API_URL}/api/upload`,
+        `${import.meta.env.VITE_REACT_APP_API_URL}/upload`,
         
         formData,
         {
@@ -31,7 +31,7 @@ function App() {
       console.error("Error sending file:", error);
       setMessages((prevMessages) => [
         ...prevMessages,
-        `Error uploading ${file.name}: ${error},url: ${import.meta.env.VITE_REACT_APP_API_URL}/api/upload`
+        `Error uploading ${file.name}: ${error},url: ${import.meta.env.VITE_REACT_APP_API_URL}/upload`
       ]);
     }
   };
