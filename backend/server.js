@@ -9,10 +9,10 @@ import axios from "axios";
 import { google } from "googleapis";
 import stream from "stream";
 import fs from "fs";
-import nodemailer from "nodemailer";
 import schedule from "node-schedule";
 import { Storage } from '@google-cloud/storage';
 import dotenv from "dotenv";
+import { sendCandidateReviewEmail } from "./resendEmail.js";
 
 dotenv.config();
 
@@ -42,11 +42,10 @@ const googleCredentials = loadGoogleCredentials();
 
 const driveFolderId = requiredEnv("GOOGLE_DRIVE_FOLDER_ID");
 const spreadsheetId = requiredEnv("SPREADSHEET_ID");
-// const externalApiUrl = requiredEnv("EXTERNAL_API_URL");
 const externalApiCandidateEmail = requiredEnv("EXTERNAL_API_CANDIDATE_EMAIL");
-const emailService = requiredEnv("EMAIL_SERVICE");
-const emailUser = requiredEnv("EMAIL_USER");
-const emailPass = requiredEnv("EMAIL_PASS");
+const resendApiKey = requiredEnv("RESEND_API_KEY");
+const resendFromEmail = requiredEnv("RESEND_FROM_EMAIL");
+const resendReplyTo = process.env.RESEND_REPLY_TO;
 const emailDelayMinutes = Number.isFinite(Number(process.env.EMAIL_SEND_DELAY_MINUTES))
     ? Number(process.env.EMAIL_SEND_DELAY_MINUTES)
     : 0;
@@ -59,13 +58,7 @@ const storageKey = new Storage({
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
-const PORT = process.env.PORT || 5001;
-
-// app.use(cors({
-//     // origin: 'https://cv-pipeline-frontend-8a53s4vkk-ravijaanthonys-projects.vercel.app'
-//     // origin: 'http://localhost:5000'
-// }));
-
+const PORT = process.env.PORT;
 
 // Use memory storage so that we can work directly with the file buffer
 const storage = multer.memoryStorage();
@@ -288,26 +281,6 @@ app.post("/upload", upload.single("file"), async (req, res) => {
         const candidateEmail = extractedData.email || "";
         let emailStatus = { status: "skipped", reason: "no_candidate_email" };
         if (candidateEmail) {
-            const transporter = nodemailer.createTransport({
-                service: emailService,
-                auth: {
-                    user: emailUser,
-                    pass: emailPass
-                }
-            });
-
-            const mailOptions = {
-                from: emailUser,
-                to: candidateEmail,
-                subject: "Your CV is Under Review",
-                text: `Dear ${extractedData.name || "Applicant"},
-    
-                Thank you for submitting your CV. We wanted to let you know that your CV is currently under review. We will get back to you soon with more information.
-    
-                Best regards,
-                Company`
-            };
-
             const delayMs = emailDelayMinutes > 0 ? emailDelayMinutes * 60 * 1000 : 0;
             if (delayMs > 0) {
                 const sendDate = new Date(Date.now() + delayMs);
@@ -316,8 +289,14 @@ app.post("/upload", upload.single("file"), async (req, res) => {
                 schedule.scheduleJob(sendDate, async function () {
                     console.log(`[${new Date().toISOString()}] email_send_started`);
                     try {
-                        let info = await transporter.sendMail(mailOptions);
-                        console.log(`[${new Date().toISOString()}] email_sent_success`, info.response);
+                        const resendResponse = await sendCandidateReviewEmail({
+                            resendApiKey,
+                            resendFromEmail,
+                            resendReplyTo,
+                            candidateEmail,
+                            applicantName: extractedData.name
+                        });
+                        console.log(`[${new Date().toISOString()}] email_sent_success`, resendResponse);
                     } catch (error) {
                         console.error(`[${new Date().toISOString()}] email_send_failed`, error);
                     }
@@ -327,12 +306,19 @@ app.post("/upload", upload.single("file"), async (req, res) => {
             } else {
                 logStep("email_send_started");
                 try {
-                    let info = await transporter.sendMail(mailOptions);
-                    emailStatus = { status: "sent", response: info.response };
-                    logStep("email_sent_success");
+                    const resendResponse = await sendCandidateReviewEmail({
+                        resendApiKey,
+                        resendFromEmail,
+                        resendReplyTo,
+                        candidateEmail,
+                        applicantName: extractedData.name
+                    });
+                    emailStatus = { status: "sent", response: resendResponse };
+                    logStep("email_sent_success", { provider: "resend" });
                 } catch (error) {
-                    emailStatus = { status: "failed", error: error.message };
-                    logStep("email_send_failed", { error: error.message }, "error");
+                    const errorMessage = error.response?.data?.message || error.message;
+                    emailStatus = { status: "failed", error: errorMessage };
+                    logStep("email_send_failed", { error: errorMessage }, "error");
                 }
             }
         } else {
