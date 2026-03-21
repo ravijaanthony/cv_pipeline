@@ -58,7 +58,7 @@ const storageKey = new Storage({
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
-const PORT = process.env.PORT;
+const PORT = Number(process.env.PORT) || 10000;
 
 // Use memory storage so that we can work directly with the file buffer
 const storage = multer.memoryStorage();
@@ -359,6 +359,6 @@ app.get("/", (req, res) => {
     res.send({ "server": "running" });
 });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, "0.0.0.0", () => console.log(`Server running on port ${PORT}`));
 
 export default app;

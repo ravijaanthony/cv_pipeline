@@ -14,8 +14,8 @@ RUN npm install
 # Copy the rest of your backend code into the container
 COPY . .
 
-# Expose the port your Express app runs on
-EXPOSE 5000
+# Expose the default port the app falls back to inside the container
+EXPOSE 10000
 
 # Start the server using the npm start script we created earlier
 CMD ["npm", "start"]
