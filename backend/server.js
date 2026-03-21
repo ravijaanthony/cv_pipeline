@@ -10,9 +10,18 @@ import { google } from "googleapis";
 import stream from "stream";
 import fs from "fs";
 import schedule from "node-schedule";
+import { randomUUID } from "crypto";
 import { Storage } from '@google-cloud/storage';
 import dotenv from "dotenv";
 import { sendCandidateReviewEmail } from "./resendEmail.js";
+import {
+    addUploadLog,
+    completeUploadProgress,
+    failUploadProgress,
+    getUploadProgress,
+    initUploadProgress,
+    updateUploadProgress
+} from "./uploadProgressStore.js";
 
 dotenv.config();
 
@@ -166,7 +175,28 @@ const extractCVData = (text) => {
 };
 let fileName;
 
+app.get("/upload-status/:uploadId", (req, res) => {
+    const snapshot = getUploadProgress(req.params.uploadId);
+    if (!snapshot) {
+        return res.status(404).json({ message: "Upload status not found" });
+    }
+
+    res.json(snapshot);
+});
+
 app.post("/upload", upload.single("file"), async (req, res) => {
+    const uploadIdHeader = req.get("x-upload-id");
+    const uploadIdBody = typeof req.body?.uploadId === "string" ? req.body.uploadId : "";
+    const uploadIdCandidate = uploadIdHeader && uploadIdHeader.trim()
+        ? uploadIdHeader.trim()
+        : uploadIdBody && uploadIdBody.trim()
+            ? uploadIdBody.trim()
+            : "";
+    const uploadId = uploadIdCandidate
+        ? uploadIdCandidate
+        : randomUUID();
+    initUploadProgress(uploadId);
+
     const processingLog = [];
     const logStep = (step, details = {}, level = "info") => {
         const entry = {
@@ -176,6 +206,7 @@ app.post("/upload", upload.single("file"), async (req, res) => {
             details
         };
         processingLog.push(entry);
+        addUploadLog(uploadId, entry);
         const logFn = level === "error" ? console.error : console.log;
         if (Object.keys(details).length > 0) {
             logFn(`[${entry.timestamp}] ${step}`, details);
@@ -188,7 +219,17 @@ app.post("/upload", upload.single("file"), async (req, res) => {
         logStep("upload_received");
         if (!req.file) {
             logStep("upload_missing_file", {}, "error");
-            return res.status(400).json({ message: "No files were uploaded.", processingLog });
+            completeUploadProgress(uploadId, {
+                status: {
+                    state: "failed"
+                }
+            });
+            return res.status(400).json({
+                message: "No files were uploaded.",
+                uploadId,
+                processingLog,
+                uploadProgress: getUploadProgress(uploadId)
+            });
         }
 
         fileName = req.file.originalname;
@@ -205,7 +246,17 @@ app.post("/upload", upload.single("file"), async (req, res) => {
             fileData = pdfResult.text;
         } else {
             logStep("unsupported_file_format", { extension: fileExtension }, "error");
-            return res.status(400).json({ message: "Unsupported file format", processingLog });
+            completeUploadProgress(uploadId, {
+                status: {
+                    state: "failed"
+                }
+            });
+            return res.status(400).json({
+                message: "Unsupported file format",
+                uploadId,
+                processingLog,
+                uploadProgress: getUploadProgress(uploadId)
+            });
         }
 
         logStep("file_parsed", { extension: fileExtension });
@@ -277,9 +328,25 @@ app.post("/upload", upload.single("file"), async (req, res) => {
         logStep("sheet_append_success", {
             updatedRange: sheetResponse.data?.updates?.updatedRange
         });
+        updateUploadProgress(uploadId, {
+            status: {
+                sheetAppend: {
+                    success: true,
+                    updatedRange: sheetResponse.data?.updates?.updatedRange
+                }
+            }
+        });
 
         const candidateEmail = extractedData.email || "";
-        let emailStatus = { status: "skipped", reason: "no_candidate_email" };
+        let emailStatus = { status: "skipped", reason: "no_candidate_email", recipient: candidateEmail };
+        updateUploadProgress(uploadId, {
+            status: {
+                email: {
+                    status: candidateEmail ? "pending" : "skipped",
+                    recipient: candidateEmail
+                }
+            }
+        });
         if (candidateEmail) {
             const delayMs = emailDelayMinutes > 0 ? emailDelayMinutes * 60 * 1000 : 0;
             if (delayMs > 0) {
@@ -287,7 +354,14 @@ app.post("/upload", upload.single("file"), async (req, res) => {
                 logStep("email_scheduled", { sendAt: sendDate.toISOString(), delayMinutes: emailDelayMinutes });
 
                 schedule.scheduleJob(sendDate, async function () {
-                    console.log(`[${new Date().toISOString()}] email_send_started`);
+                    const scheduledStartEntry = {
+                        step: "email_send_started",
+                        level: "info",
+                        timestamp: new Date().toISOString(),
+                        details: { provider: "resend", scheduled: true, recipient: candidateEmail }
+                    };
+                    addUploadLog(uploadId, scheduledStartEntry);
+                    console.log(`[${scheduledStartEntry.timestamp}] email_send_started`, scheduledStartEntry.details);
                     try {
                         const resendResponse = await sendCandidateReviewEmail({
                             resendApiKey,
@@ -296,15 +370,62 @@ app.post("/upload", upload.single("file"), async (req, res) => {
                             candidateEmail,
                             applicantName: extractedData.name
                         });
-                        console.log(`[${new Date().toISOString()}] email_sent_success`, resendResponse);
+                        const scheduledSuccessEntry = {
+                            step: "email_sent_success",
+                            level: "info",
+                            timestamp: new Date().toISOString(),
+                            details: { provider: "resend", scheduled: true, recipient: candidateEmail }
+                        };
+                        addUploadLog(uploadId, scheduledSuccessEntry);
+                        updateUploadProgress(uploadId, {
+                            status: {
+                                email: {
+                                    status: "sent",
+                                    recipient: candidateEmail,
+                                    response: resendResponse
+                                }
+                            }
+                        });
+                        completeUploadProgress(uploadId, {
+                            status: {
+                                email: {
+                                    status: "sent",
+                                    recipient: candidateEmail,
+                                    response: resendResponse
+                                }
+                            }
+                        });
+                        console.log(`[${scheduledSuccessEntry.timestamp}] email_sent_success`, resendResponse);
                     } catch (error) {
-                        console.error(`[${new Date().toISOString()}] email_send_failed`, error);
+                        const errorMessage = error.response?.data?.message || error.message;
+                        const scheduledFailureEntry = {
+                            step: "email_send_failed",
+                            level: "error",
+                            timestamp: new Date().toISOString(),
+                            details: { error: errorMessage, scheduled: true, recipient: candidateEmail }
+                        };
+                        addUploadLog(uploadId, scheduledFailureEntry);
+                        updateUploadProgress(uploadId, {
+                            status: {
+                                email: {
+                                    status: "failed",
+                                    recipient: candidateEmail,
+                                    error: errorMessage
+                                }
+                            }
+                        });
+                        console.error(`[${scheduledFailureEntry.timestamp}] email_send_failed`, error);
                     }
                 });
 
-                emailStatus = { status: "scheduled", sendAt: sendDate.toISOString() };
+                emailStatus = { status: "scheduled", sendAt: sendDate.toISOString(), recipient: candidateEmail };
+                updateUploadProgress(uploadId, {
+                    status: {
+                        email: emailStatus
+                    }
+                });
             } else {
-                logStep("email_send_started");
+                logStep("email_send_started", { recipient: candidateEmail, provider: "resend" });
                 try {
                     const resendResponse = await sendCandidateReviewEmail({
                         resendApiKey,
@@ -313,33 +434,66 @@ app.post("/upload", upload.single("file"), async (req, res) => {
                         candidateEmail,
                         applicantName: extractedData.name
                     });
-                    emailStatus = { status: "sent", response: resendResponse };
-                    logStep("email_sent_success", { provider: "resend" });
+                    emailStatus = { status: "sent", response: resendResponse, recipient: candidateEmail };
+                    logStep("email_sent_success", { provider: "resend", recipient: candidateEmail });
                 } catch (error) {
                     const errorMessage = error.response?.data?.message || error.message;
-                    emailStatus = { status: "failed", error: errorMessage };
-                    logStep("email_send_failed", { error: errorMessage }, "error");
+                    emailStatus = { status: "failed", error: errorMessage, recipient: candidateEmail };
+                    logStep("email_send_failed", { error: errorMessage, recipient: candidateEmail }, "error");
                 }
+                updateUploadProgress(uploadId, {
+                    status: {
+                        email: emailStatus
+                    }
+                });
             }
         } else {
             logStep("email_skipped", { reason: "no_candidate_email" });
+            updateUploadProgress(uploadId, {
+                status: {
+                    email: emailStatus
+                }
+            });
         }
+
+        completeUploadProgress(uploadId, {
+            currentStep: "upload_completed",
+            status: {
+                sheetAppend: {
+                    success: true,
+                    updatedRange: sheetResponse.data?.updates?.updatedRange
+                },
+                email: emailStatus
+            }
+        });
 
         res.json({
             message: "File processed successfully",
+            uploadId,
             fileId: driveFileId,
             extractedData,
             sheetResponse: sheetResponse.data,
             downloadablePublicLink,
             processingLog,
+            uploadProgress: getUploadProgress(uploadId),
             status: {
-                sheetAppend: { success: true },
+                sheetAppend: {
+                    success: true,
+                    updatedRange: sheetResponse.data?.updates?.updatedRange
+                },
                 email: emailStatus
             }
         });
     } catch (error) {
         logStep("upload_failed", { error: error.message }, "error");
-        res.status(500).json({ message: "Upload failed", error: error.message, processingLog });
+        failUploadProgress(uploadId, error.message);
+        res.status(500).json({
+            message: "Upload failed",
+            error: error.message,
+            uploadId,
+            processingLog,
+            uploadProgress: getUploadProgress(uploadId)
+        });
     }
 });
 
